@@ -7,9 +7,22 @@ ports:
     public: true
     path: "/"
     isAuth: false
+  - protocol: "HTTPS"
+    targetProtocol: "HTTP"
+    listeningPort: "9911"
+    targetPort: "9119"
+    targetIP: "172.17.0.1"
+    public: true
+    path: "/"
+    isAuth: true
+    login: "root"
+    loginTitle: "Hermes Dashboard"
+    password: "random_password"
 
 environments:
   - key: "SOFTWARE_VERSION_TAG"
+    value: "latest"
+  - key: "HERMES_WEBUI_VERSION_TAG"
     value: "latest"
   - key: "ADMIN_EMAIL"
     value: "[EMAIL]"
@@ -40,4 +53,8 @@ webUI:
   - url: "https://[CI_CD_DOMAIN]"
     label: "Hermes WebUI"
     login: ""
+    password: "[ADMIN_PASSWORD]"
+  - url: "https://[CI_CD_DOMAIN]:9911"
+    label: "Hermes Dashboard"
+    login: "root"
     password: "[ADMIN_PASSWORD]"
