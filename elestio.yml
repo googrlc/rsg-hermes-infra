@@ -15,7 +15,7 @@ environments:
     value: "[EMAIL]"
   - key: "DOMAIN"
     value: "[CI_CD_DOMAIN]"
-  - key: "HERMES_WEBUI_PASSWORD"
+  - key: "ADMIN_PASSWORD"
     value: "random_password"
 
 config:
@@ -40,4 +40,4 @@ webUI:
   - url: "https://[CI_CD_DOMAIN]"
     label: "Hermes WebUI"
     login: ""
-    password: "[HERMES_WEBUI_PASSWORD]"
+    password: "[ADMIN_PASSWORD]"

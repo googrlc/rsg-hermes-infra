@@ -13,7 +13,7 @@ Deploy Hermes WebUI server with CI/CD on Elestio
 You can open Hermes WebUI here:
 
     URL: https://[CI_CD_DOMAIN]
-    password: [HERMES_WEBUI_PASSWORD]
+    password: [ADMIN_PASSWORD]
 
 After unlocking with the password, open `Settings -> Providers` and connect a model provider. Two providers can be linked via OAuth in two clicks (Nous Portal, GitHub Copilot) — no API key required. The other ten providers (Anthropic, OpenAI, Gemini, Google, Mistral, DeepSeek, Kimi/Moonshot, MiniMax, Ollama, Ollama Cloud) take a paste-in API key.
 
