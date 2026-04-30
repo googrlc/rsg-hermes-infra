@@ -54,7 +54,3 @@ webUI:
     label: "Hermes WebUI"
     login: ""
     password: "[ADMIN_PASSWORD]"
-  - url: "https://[CI_CD_DOMAIN]:9911"
-    label: "Hermes Dashboard"
-    login: "root"
-    password: "[ADMIN_PASSWORD]"
