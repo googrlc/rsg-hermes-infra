@@ -45,7 +45,7 @@ services:
       - WANTED_GID=10000
     volumes:
       - ./hermes-home:/home/hermeswebui/.hermes
-      - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent
+      - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
       - ./workspace:/workspace
     healthcheck:
       test:
