@@ -58,6 +58,29 @@ services:
       retries: 5
       start_period: 60s
 
+  # EspoCRM + Supabase MCP bridge (read + propose tools; no live-write tool).
+  # In-network endpoint for the agent:  http://espo-mcp:8080/mcp
+  # Secrets come from .env (ESPOCRM_*/SUPABASE_*); empty is fine for a connectivity
+  # test — initialize/tools-list need no backend creds, only tool CALLS do.
+  espo-mcp:
+    build:
+      context: ./espo-mcp
+    restart: always
+    expose:
+      - 8080
+    environment:
+      - API_SERVER_KEY=${API_SERVER_KEY:-}
+      - ESPOCRM_BASE_URL=${ESPOCRM_BASE_URL:-}
+      - ESPOCRM_API_KEY=${ESPOCRM_API_KEY:-}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 # hermes-agent-src is a named Docker volume (NOT a bind mount): the
 # nousresearch/hermes-agent image ships its Python source code at /opt/hermes,
 # and a bind mount to an empty host directory would mask those files. With a
