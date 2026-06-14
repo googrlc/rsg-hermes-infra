@@ -20,6 +20,7 @@ services:
     ports:
       - "172.17.0.1:9119:9119"
     environment:
+      - HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
       - HERMES_HOME=/home/hermes/.hermes
       - HERMES_UID=10000
       - HERMES_GID=10000
