@@ -1,1 +1,8 @@
 .env
+.env.*
+*.env
+*.bak
+*.bak-*
+*.bak.*
+__pycache__/
+*.pyc
