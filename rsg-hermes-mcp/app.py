@@ -196,6 +196,52 @@ def _mcp_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "list_cases",
+            "description": (
+                "Open cases with checklist progress — how far through each is, whether every "
+                "required task is done (can_close), and how many are still blocking. Read-only."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "description": "Filter by status (default 'open')."},
+                    "case_type": {"type": "string", "description": "Filter by type, e.g. renewal, onboarding, service."},
+                    "limit": {"type": "integer", "description": "Max cases (default 50)."},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "case_progress",
+            "description": (
+                "One case's checklist state: tasks done vs total, required tasks outstanding, and "
+                "whether it can be closed. Omit case_id to get every open case that is BLOCKED, "
+                "with the specific task titles stopping each one. Read-only."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string", "description": "Case uuid. Omit for all blocked cases."},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "list_intake_queue",
+            "description": (
+                "Intake submissions waiting on a human, oldest first, plus how many days the "
+                "oldest has been sitting and any recent failures. Read-only."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "description": "Max rows (default 50)."}},
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "create_case",
             "description": (
                 "Open a case (agency_crm_cases) via POST /api/cases — the container a task hangs on. "
@@ -412,6 +458,32 @@ def _run_create_task(args: dict[str, Any]) -> str:
     return _text(_api("POST", "/api/tasks", body=body))
 
 
+def _run_list_cases(args: dict[str, Any]) -> str:
+    q = {
+        "status": (args.get("status") or "open").strip(),
+        "limit": str(args.get("limit") or 50),
+        "include_progress": "true",
+    }
+    case_type = (args.get("case_type") or "").strip()
+    if case_type:
+        q["case_type"] = case_type
+    return _text(_api("GET", "/api/cases?" + urllib.parse.urlencode(q)))
+
+
+def _run_case_progress(args: dict[str, Any]) -> str:
+    case_id = (args.get("case_id") or "").strip()
+    # No id means "what is stuck?" — the more useful default for a briefing than
+    # an error telling the caller to go find an id first.
+    if not case_id:
+        return _text(_api("GET", "/api/cases/blocked"))
+    return _text(_api("GET", f"/api/cases/{urllib.parse.quote(case_id)}/progress"))
+
+
+def _run_list_intake_queue(args: dict[str, Any]) -> str:
+    limit = str(args.get("limit") or 50)
+    return _text(_api("GET", "/api/intake/queue?" + urllib.parse.urlencode({"limit": limit})))
+
+
 def _run_create_case(args: dict[str, Any]) -> str:
     title = (args.get("title") or "").strip()
     owner = (args.get("owner_email") or "").strip()
@@ -520,6 +592,9 @@ _HANDLERS = {
     "complete_task": _run_complete_task,
     "create_task": _run_create_task,
     "create_case": _run_create_case,
+    "list_cases": _run_list_cases,
+    "case_progress": _run_case_progress,
+    "list_intake_queue": _run_list_intake_queue,
     "draft_intake": _run_draft_intake,
     "list_documents": _run_list_documents,
     "save_document": _run_save_document,
