@@ -13,6 +13,7 @@ any write, so the human-approval gate is preserved end to end.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -82,12 +83,36 @@ app = FastAPI(title="rsg-hermes MCP Bridge", docs_url=None, redoc_url=None)
 
 
 def _check_auth(request: Request) -> bool:
+    """Accept the same secret however the client chooses to present it.
+
+    Previously only `Authorization: Bearer <key>` was honoured. Clients configured
+    with an "API key" auth scheme rather than a bearer one send `X-API-Key`, or a
+    bare `Authorization: <key>` with no scheme — both were rejected, and the
+    failure is indistinguishable from a wrong key, which sends you hunting for a
+    credential problem that does not exist.
+
+    This widens the accepted envelope, not the secret: it is the same single token
+    either way. Compared with compare_digest so a wrong key cannot be recovered a
+    character at a time from response timing.
+    """
     if not AUTH_TOKEN:
         return True
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip() == AUTH_TOKEN
-    return False
+
+    candidates: list[str] = []
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth:
+        # "Bearer xxx" / "Token xxx" / bare "xxx"
+        parts = auth.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() in ("bearer", "token"):
+            candidates.append(parts[1].strip())
+        else:
+            candidates.append(auth)
+    for header in ("x-api-key", "x-api-token", "api-key", "x-auth-token"):
+        value = (request.headers.get(header) or "").strip()
+        if value:
+            candidates.append(value)
+
+    return any(hmac.compare_digest(c, AUTH_TOKEN) for c in candidates)
 
 
 # --- backend call helper ----------------------------------------------------
