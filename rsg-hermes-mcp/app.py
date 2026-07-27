@@ -21,8 +21,10 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+import asyncio
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 log = logging.getLogger("rsg-hermes-mcp")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -57,6 +59,21 @@ RSG_INTAKE_API_KEY = os.environ.get("RSG_INTAKE_API_KEY", "").strip()
 AUTH_TOKEN = os.environ.get("API_SERVER_KEY", "").strip()
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+# Versions we can actually speak. Ordered newest-first; on initialize we echo the
+# client's version when it is one of these, instead of always answering
+# 2024-11-05. Strict clients (ChatGPT's connector) refuse a server that answers a
+# negotiation with a version they did not offer.
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+
+# Bearer-gated, so a wildcard origin grants nothing on its own — and the connector
+# UIs preflight from a browser origin, which fails closed without these.
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID",
+    "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version",
+    "Access-Control-Max-Age": "86400",
+}
 SERVER_NAME = "rsg-hermes-mcp-bridge"
 SERVER_VERSION = "1.0.0"
 HTTP_TIMEOUT = 45
@@ -612,14 +629,47 @@ _HANDLERS = {
 
 # --- JSON-RPC plumbing (MCP 2024-11-05) -------------------------------------
 def _sse(obj: dict) -> Response:
-    return Response(content=f"event: message\r\ndata: {json.dumps(obj)}\r\n\r\n", media_type="text/event-stream")
+    return Response(
+        content=f"event: message\r\ndata: {json.dumps(obj)}\r\n\r\n",
+        media_type="text/event-stream",
+        headers=_CORS_HEADERS,
+    )
 
-def _result(rid: Any, result: dict[str, Any]) -> Response:
-    return _sse({"jsonrpc": "2.0", "id": rid, "result": result})
+
+def _json(obj: dict) -> Response:
+    return JSONResponse(content=obj, headers=_CORS_HEADERS)
 
 
-def _error(rid: Any, code: int, message: str) -> Response:
-    return _sse({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
+def _wants_sse(request: "Request | None") -> bool:
+    """Honour the client's Accept header instead of always answering SSE.
+
+    Streamable HTTP lets the server reply with either application/json or
+    text/event-stream, but it has to be one the client asked for. This bridge used
+    to answer text/event-stream unconditionally, so a client sending
+    `Accept: application/json` got a body it had every right to reject — which is
+    exactly how "failed to add connector" presents.
+    """
+    if request is None:
+        return True
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/event-stream" in accept:
+        return True
+    if "application/json" in accept:
+        return False
+    return True  # unspecified: keep the historical behaviour
+
+
+def _respond(rid: Any, payload: dict[str, Any], request: "Request | None" = None) -> Response:
+    body = {"jsonrpc": "2.0", "id": rid, **payload}
+    return _sse(body) if _wants_sse(request) else _json(body)
+
+
+def _result(rid: Any, result: dict[str, Any], request: "Request | None" = None) -> Response:
+    return _respond(rid, {"result": result}, request)
+
+
+def _error(rid: Any, code: int, message: str, request: "Request | None" = None) -> Response:
+    return _respond(rid, {"error": {"code": code, "message": message}}, request)
 
 
 @app.get("/healthz")
@@ -631,39 +681,92 @@ def healthz() -> dict[str, str]:
 @app.post("/api/mcp")
 async def mcp(request: Request) -> JSONResponse:
     if not _check_auth(request):
-        return _error(None, -32001, "Unauthorized")
+        return _error(None, -32001, "Unauthorized", request)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
-        return _error(None, -32700, "Parse error")
+        return _error(None, -32700, "Parse error", request)
 
     method = body.get("method")
     rid = body.get("id")
     params = body.get("params") or {}
 
     if method == "initialize":
+        # Echo the client's protocol version when we support it. Answering a
+        # negotiation with a version the client never offered is grounds for it to
+        # abort the connection.
+        asked = (params.get("protocolVersion") or "").strip()
+        agreed = asked if asked in SUPPORTED_PROTOCOL_VERSIONS else MCP_PROTOCOL_VERSION
         return _result(rid, {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {"tools": {}},
+            "protocolVersion": agreed,
+            "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-        })
+        }, request)
     if method in ("notifications/initialized", "initialized"):
-        return Response(status_code=202)
+        return Response(status_code=202, headers=_CORS_HEADERS)
     if method == "ping":
-        return _result(rid, {})
+        return _result(rid, {}, request)
     if method == "tools/list":
-        return _result(rid, {"tools": _mcp_tools()})
+        return _result(rid, {"tools": _mcp_tools()}, request)
     if method == "tools/call":
         name = params.get("name")
         args = params.get("arguments") or {}
         handler = _HANDLERS.get(name)
         if handler is None:
-            return _result(rid, {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True})
+            return _result(rid, {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True}, request)
         try:
             text = handler(args)
         except Exception as exc:  # noqa: BLE001
             log.exception("tool %s failed", name)
-            return _result(rid, {"content": [{"type": "text", "text": f"Error: {exc}"}], "isError": True})
-        return _result(rid, {"content": [{"type": "text", "text": text}]})
+            return _result(rid, {"content": [{"type": "text", "text": f"Error: {exc}"}], "isError": True}, request)
+        return _result(rid, {"content": [{"type": "text", "text": text}]}, request)
 
-    return _error(rid, -32601, f"Method not found: {method}")
+    return _error(rid, -32601, f"Method not found: {method}", request)
+
+
+# Streamable HTTP expects more than POST. Without these a connector's preflight or
+# stream-open fails before a single JSON-RPC message is exchanged, which surfaces
+# only as "failed to add connector" with no detail.
+@app.options("/mcp")
+@app.options("/api/mcp")
+async def mcp_options() -> Response:
+    return Response(status_code=204, headers=_CORS_HEADERS)
+
+
+@app.get("/mcp")
+@app.get("/api/mcp")
+async def mcp_stream(request: Request) -> Response:
+    """Server-to-client SSE stream.
+
+    This bridge is stateless and never initiates anything, so the stream carries
+    only keepalive comments. It exists because clients that open it treat a 405 as
+    a failed connection, and holding an idle SSE connection is cheap.
+    """
+    if not _check_auth(request):
+        return _error(None, -32001, "Unauthorized", request)
+
+    async def _keepalive():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    return
+                yield b": keepalive\r\n\r\n"
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:  # client went away; nothing to clean up
+            return
+
+    return StreamingResponse(
+        _keepalive(),
+        media_type="text/event-stream",
+        headers={**_CORS_HEADERS, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.delete("/mcp")
+@app.delete("/api/mcp")
+async def mcp_delete(request: Request) -> Response:
+    """Session termination. Stateless here, so there is nothing to tear down —
+    but a 405 makes a well-behaved client think the teardown failed."""
+    if not _check_auth(request):
+        return _error(None, -32001, "Unauthorized", request)
+    return Response(status_code=204, headers=_CORS_HEADERS)
